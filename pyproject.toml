@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "argon-fan-manager"
+version = "0.1.0"
+description = "Manage fan for Argon One V2 Raspberry Pi case (based on CPU temp)"
+authors = ["Zach Hauser <zehauser@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+smbus = "^1.1.post2"
+"RPi.GPIO" = "^0.7.1"
+
+[tool.poetry.scripts]
+argon-fan-manager = "argon_fan_manager.argon_fan_manager:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
