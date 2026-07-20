@@ -1,11 +1,26 @@
 {
   description = "Manage fan for Argon One V2 Raspberry Pi case (based on CPU temp)";
 
-  inputs.nixpkgs.url = "nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "nixpkgs/nixos-unstable";
 
-  inputs.poetry2nix = {
-    url = "github:nix-community/poetry2nix";
-    inputs.nixpkgs.follows = "nixpkgs";
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -13,46 +28,63 @@
     let
       system = "aarch64-linux";
       pkgs = inputs.nixpkgs.legacyPackages.${system};
-      poetry2nix = inputs.poetry2nix.lib.mkPoetry2Nix { inherit pkgs; };
+      inherit (inputs.nixpkgs) lib;
 
-      # See: https://github.com/nix-community/poetry2nix/blob/4277e49c00037ebe016e641abdcd0a1d1dab7849/docs/edgecases.md#modulenotfounderror-no-module-named-packagename
-      poetryOverrides = poetry2nix.defaultPoetryOverrides.extend (
-        final: prev: {
-          smbus = prev.smbus.overridePythonAttrs (old: {
-            buildInputs = old.buildInputs ++ [ prev.setuptools ];
-          });
+      python = lib.head (
+        inputs.pyproject-nix.lib.util.filterPythonInterpreters {
+          inherit (workspace) requires-python;
+          inherit (pkgs) pythonInterpreters;
         }
       );
 
-    in
-
-    {
-      packages.${system}.default = poetry2nix.mkPoetryApplication {
-        projectDir = inputs.self;
-        overrides = poetryOverrides;
+      workspace = inputs.uv2nix.lib.workspace.loadWorkspace {
+        workspaceRoot = ./.;
       };
 
+      overlay = workspace.mkPyprojectOverlay {
+        sourcePreference = "wheel";
+      };
+
+      pythonSet =
+        (pkgs.callPackage inputs.pyproject-nix.build.packages {
+          inherit python;
+        }).overrideScope
+          (
+            lib.composeManyExtensions [
+              inputs.pyproject-build-systems.overlays.default
+              overlay
+            ]
+          );
+    in
+    {
+      packages.${system}.default = pythonSet.mkVirtualEnv "argon-fan-manager-env" workspace.deps.default;
+
       devShells.${system}.default = pkgs.mkShell {
-        packages = [ pkgs.poetry ];
-        buildInputs = [
-          (poetry2nix.mkPoetryEnv {
-            projectDir = inputs.self;
-            overrides = poetryOverrides;
-          })
+        packages = [
+          pkgs.uv
+          inputs.self.packages.${system}.default
         ];
+        env = {
+          UV_NO_SYNC = "1";
+          UV_PYTHON = python.interpreter;
+          UV_PYTHON_DOWNLOADS = "never";
+        };
+        shellHook = ''
+          unset PYTHONPATH
+        '';
       };
 
       nixosModules.${system}.default =
-        { ... }:
+        { pkgs, ... }:
         {
           systemd.services.argon-fan-manager = {
             description = "Manage fan for Argon One V2 Raspberry Pi case (based on CPU temp)";
             after = [ "multi-user.target" ];
             wantedBy = [ "multi-user.target" ];
             serviceConfig.Restart = "always";
-            serviceConfig.RemainAfterExit = "true";
+            serviceConfig.RestartSec = 5;
             script = ''
-              ${inputs.self.packages.${system}.default}/bin/argon-fan-manager
+              ${inputs.self.packages.${pkgs.system}.default}/bin/argon-fan-manager
             '';
           };
         };
